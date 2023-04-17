@@ -1,26 +1,30 @@
 import os.path
-import whisper
+import whisper #listed under openai-whisper in requirements
 from flask import Flask, jsonify, request
-from flask_cors import CORS, cross_origin
+from flask_cors import CORS
 import re
 import requests
 from dotenv import load_dotenv
 import os
 import openai
 import logging
+import torch
 
 
 # ALLOW = 'http://localhost:3000'
 ALLOW = 'https://podcast-university.web.app'
-app = Flask(__name__)
-# cors = CORS(app, resources={r"/*": {"origins": f"{ALLOW}"}})
 
+app = Flask(__name__)
+cors = CORS(app, resources={r"/*": {"origins": f"{ALLOW}"}})
+# CORS(app)
 TOKEN_LIMIT = 4096
 WORD_CHUNK = 2700
 TOKEN_WORD_RATIO = 1.41
 RESIZED_TXT = "_resized.txt"
 load_dotenv()
-OPENAI_KEY = os.getenv('OPENAI_KEY')
+OPENAI_KEY = os.environ.get('OPENAI_KEY')
+HOME = os.environ.get('APP_HOME')
+APP_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
 class InvalidPodName(Exception):
@@ -30,6 +34,12 @@ class InvalidPodName(Exception):
 class InvalidFeedUrl(Exception):
     "Unable to get RSS Feed for this podcast provided"
     pass
+
+
+@app.route('/')
+def hello_world():
+    print("My time to shine, hello world!")
+    return 'Hello World'
 
 
 @app.route('/get_summary', methods=['POST'])
@@ -109,15 +119,21 @@ def get_name_and_rss_feed_url(apple_podcast_url):
 def download_podcast(pod_name, rss_feed_url):
     print("downloading")
     response = requests.get(rss_feed_url)
-    file_path = os.path.join("./pod_downloads", f"{pod_name}.mp3")
+    if not os.path.exists(f'{APP_DIR}/pod_downloads'):
+        print("CREATING POD_DOWNLOADS DIRECTORY")
+        os.mkdir(f'{APP_DIR}/pod_downloads')
+    file_path = os.path.join(f"{APP_DIR}/pod_downloads", f"{pod_name}.mp3")
     with open(file_path, 'wb') as file:
         file.write(response.content)
     print("DONE DOWNLOADING")
 
 
 def check_podcast_transcription_and_audio_contents(rss_feed, pod_name):
-    file_path_transcription = f"./transcriptions/{pod_name}.txt"
-    file_path_pod_audio_download = f"./pod_downloads/{pod_name}.mp3"
+    file_path_transcription = f"{HOME}/transcriptions/{pod_name}.txt"
+    if not os.path.exists(f'{APP_DIR}/pod_downloads'):
+        print("CREATING pod_downloads DIRECTORY")
+        os.mkdir(f'{APP_DIR}/pod_downloads')
+    file_path_pod_audio_download = f"{APP_DIR}/pod_downloads/{pod_name}.mp3"
     if not os.path.isfile(file_path_transcription):
         if not os.path.isfile(file_path_pod_audio_download):
             download_podcast(pod_name, rss_feed)
@@ -128,11 +144,16 @@ def check_podcast_transcription_and_audio_contents(rss_feed, pod_name):
 
 def set_rawtrans_and_TLtrans(pod_name):
     # set raw transcription of audio file
-
-    model = whisper.load_model("small.en")
-    result = model.transcribe(f"./pod_downloads/{pod_name}.mp3")
+    torch.cuda.is_available()
+    print("AVAILABLE: ",  torch.cuda.is_available())
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    model = whisper.load_model("base.en", device=DEVICE)
+    result = model.transcribe(f"{APP_DIR}/pod_downloads/{pod_name}.mp3")
     transcription = result["text"]
-    with open(f'./transcriptions/{pod_name}.txt', 'w') as file:
+    if not os.path.exists(f'{APP_DIR}/transcriptions'):
+        print("CREATING transcriptions DIRECTORY")
+        os.mkdir(f'{APP_DIR}/transcriptions')
+    with open(f'{APP_DIR}/transcriptions/{pod_name}.txt', 'w') as file:
         file.write(transcription)
 
     # chunked_transcription = chunkify(transcription, num_bullets)
@@ -144,7 +165,10 @@ def set_rawtrans_and_TLtrans(pod_name):
     '''
     # chunked_transcription = resize_transcription(f"{pod_name}.txt")
     chunked_transcription = resize_transcription(f"{pod_name}.txt")
-    with open(f'./transcriptions_resized/{pod_name}{RESIZED_TXT}', 'w') as resized_transcription:
+    if not os.path.exists(f'{APP_DIR}/transcriptions_resized'):
+        print("CREATING transcriptions_resized DIRECTORY")
+        os.mkdir(f'{APP_DIR}/transcriptions_resized')
+    with open(f'{APP_DIR}/transcriptions_resized/{pod_name}{RESIZED_TXT}', 'w') as resized_transcription:
         resized_transcription.write(chunked_transcription)
 
 
@@ -166,8 +190,12 @@ def summarize_text(text, num_words_to_summarize_to):
     generated_text = response["choices"][0]["text"]
     return generated_text
 
+
 def get_bullet_summary(txt_file, num_bullets):
-    with open('./transcriptions_resized/'+txt_file, 'r') as file:
+    if not os.path.exists(f'{APP_DIR}/transcriptions_resized'):
+        print("CREATING transcriptions_resized DIRECTORY")
+        os.mkdir(f'{APP_DIR}/transcriptions_resized')
+    with open(f'{APP_DIR}/transcriptions_resized/'+txt_file, 'r') as file:
         content = file.read()
 
     prompt = f"Summarize the following into {str(num_bullets)} bullet points:\n\n{content}\n"
@@ -188,7 +216,7 @@ def get_bullet_summary(txt_file, num_bullets):
 
 
 def resize_transcription(txt_file) -> str:
-    with open(f'./transcriptions/{txt_file}', 'r') as file:
+    with open(f'{APP_DIR}/transcriptions/{txt_file}', 'r') as file:
         transcription = str(file.read())
     total_words = total_num_words(transcription)
     # 4096 tokens is equivalent to 2900 words, 2900 word chunks will be how we chunk out
