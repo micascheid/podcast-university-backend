@@ -7,15 +7,13 @@ import requests
 from dotenv import load_dotenv
 import os
 import openai
-import textwrap
-from google.cloud import speech
 import logging
 
+
+# ALLOW = 'http://localhost:3000'
+ALLOW = 'https://podcast-university.web.app'
 app = Flask(__name__)
-# cors = CORS(app, resources={r"/*": {"origins": "*"}})
-cors = CORS(app, resources={r"/*": {"origins": "*"}})
-app.config['CORS_HEADERS'] = 'Content-Type'
-# CORS(app)
+# cors = CORS(app, resources={r"/*": {"origins": f"{ALLOW}"}})
 
 TOKEN_LIMIT = 4096
 WORD_CHUNK = 2700
@@ -35,7 +33,6 @@ class InvalidFeedUrl(Exception):
 
 
 @app.route('/get_summary', methods=['POST'])
-@cross_origin(origin='localhost', headers=['Content- Type','Authorization'])
 def get_summary():
     logging.getLogger('flask_cors').level = logging.DEBUG
     # https://podcasts.apple.com/us/podcast/the-acquired-podcast-hosts-how-they-started-and/id1469759170?i=1000607682857
@@ -236,6 +233,6 @@ def total_num_words(string):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
-
+    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    # app.run(debug=True)
 
