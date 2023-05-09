@@ -1,0 +1,42 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: podcast-university-ingress
+  annotations:
+    kubernetes.io/ingress.global-static-ip-name: podcast-university-httpsip
+    networking.gke.io/managed-certificates: podcast-university-managed-cert
+    kubernetes.io/ingress.class: "gce"
+  labels:
+    app: podcast-university-deployment
+    tier: web
+spec:
+  defaultBackend:
+    service:
+      name: podcast-university-service
+      port:
+        number: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: podcast-university-service
+  labels:
+    app: podcast-university-deployment
+    tier: web
+  annotations:
+    cloud.google.com/backend-config: '{"default": "podcast-university-backend-config"}'
+spec:
+  type: NodePort
+  selector:
+    app: podcast-university-deployment
+    tier: web
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: podcast-university-backend-config
+spec:
+  timeoutSec: 1200

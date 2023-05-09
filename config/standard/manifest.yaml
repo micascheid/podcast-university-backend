@@ -1,0 +1,57 @@
+---
+apiVersion: "apps/v1"
+kind: "Deployment"
+metadata:
+  name: "podcast-university-deployment"
+  namespace: "default"
+  labels:
+    app: "podcast-university-deployment"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: "podcast-university-deployment"
+  template:
+    metadata:
+      labels:
+        app: "podcast-university-deployment"
+        tier: web
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-accelerator: "nvidia-tesla-t4"
+      containers:
+      - name: "podcast-university-app"
+        image: "us-east1-docker.pkg.dev/podcast-university/podcast-university-repo/podcast-university-app:v2.1gpu"
+        resources:
+          requests:
+            cpu: 1
+            memory: 4Gi
+            ephemeral-storage: 2Gi
+            nvidia.com/gpu: 1
+          limits:
+            cpu: 1
+            memory: 4Gi
+            ephemeral-storage: 2Gi
+            nvidia.com/gpu: 1
+---
+apiVersion: "autoscaling/v2"
+kind: "HorizontalPodAutoscaler"
+metadata:
+  name: "podcast-university-deployment-hpa"
+  namespace: "default"
+  labels:
+    app: "podcast-university-deployment"
+spec:
+  scaleTargetRef:
+    kind: "Deployment"
+    name: "podcast-university-deployment"
+    apiVersion: "apps/v1"
+  minReplicas: 1
+  maxReplicas: 1
+  metrics:
+  - type: "Resource"
+    resource:
+      name: "cpu"
+      target:
+        type: "Utilization"
+        averageUtilization: 80

@@ -1,0 +1,42 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: podcast-summary-deployment
+  labels:
+    app: podcast-university-app
+spec:
+  selector:
+    matchLabels:
+      app: podcast-university-app
+      tier: web
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: podcast-university-app
+        tier: web
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-accelerator: "nvidia-tesla-t4"
+        cloud.google.com/gke-spot: "true"
+      terminationGracePeriodSeconds: 30
+      containers:
+      - name: podcast-university-app
+        image: us-east1-docker.pkg.dev/podcast-university/podcast-university-repo/podcast-university-app:v2.1gpu
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 4
+            memory: 15Gi
+            nvidia.com/gpu: 2
+            ephemeral-storage: 2Gi
+          limits:
+            cpu: 4
+            memory: 15Gi
+            nvidia.com/gpu: 2
+            ephemeral-storage: 4Gi

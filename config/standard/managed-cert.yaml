@@ -1,7 +1,7 @@
 apiVersion: networking.gke.io/v1
 kind: ManagedCertificate
 metadata:
-  name: managed-cert
+  name: podcast-university-managed-cert
 spec:
   domains:
-    - api.podcastsummary.io
+    - api.podcastuniversity.io

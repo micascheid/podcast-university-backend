@@ -1,0 +1,13 @@
+__pycache__
+
+.env
+
+pod_downloads/**
+transcriptions/**
+transcriptions_resized/**
+
+playground.py
+
+notes.txt
+
+messaround.py
