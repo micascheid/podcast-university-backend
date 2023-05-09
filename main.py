@@ -1,7 +1,7 @@
 import os.path
 import whisper #listed under openai-whisper in requirements
-from flask import Flask, jsonify, request
-from flask_cors import CORS
+from flask import Flask, jsonify, request, abort
+from flask_cors import CORS, cross_origin
 import re
 import requests
 from dotenv import load_dotenv
@@ -9,14 +9,24 @@ import os
 import openai
 import logging
 import torch
+import time
+import firebase_admin
+from firebase_admin import firestore, credentials
 
 
-# ALLOW = 'http://localhost:3000'
-ALLOW = 'https://podcast-university.web.app'
+# Local
+ALLOW = 'http://localhost:3000'
+TEST_LOCAL = "localhost"
+os.environ['FIRESTORE_EMULATOR_HOST'] = f'{TEST_LOCAL}:8081'
+
+# Production
+# ALLOW = 'https://podcast-university.web.app'
+
 
 app = Flask(__name__)
-cors = CORS(app, resources={r"/*": {"origins": f"{ALLOW}"}})
-# CORS(app)
+# cors = CORS(app, resources={r"/*": {"origins": f"{ALLOW}"}})
+# CORS(app, resources={r'*': {'origins': '*'}})
+CORS(app)
 TOKEN_LIMIT = 4096
 WORD_CHUNK = 2700
 TOKEN_WORD_RATIO = 1.41
@@ -26,10 +36,21 @@ OPENAI_KEY = os.environ.get('OPENAI_KEY')
 HOME = os.environ.get('APP_HOME')
 APP_DIR = os.path.abspath(os.path.dirname(__file__))
 
+# initialize firebase admin-sdk
+# local
+cred = credentials.Certificate(f"./firebase_credentials.json")
+
+# production
+# cred = credentials.Certificate(f"{HOME}/firebase_credentials.json")
+
+firebase_app = firebase_admin.initialize_app(cred)
+db = firestore.client()
+
 
 class InvalidPodName(Exception):
     "Invalid podcast name, please check the provided link"
     pass
+
 
 class InvalidFeedUrl(Exception):
     "Unable to get RSS Feed for this podcast provided"
@@ -38,12 +59,12 @@ class InvalidFeedUrl(Exception):
 
 @app.route('/')
 def hello_world():
-    print("My time to shine, hello world!")
-    return 'Hello World'
+    return 'PodcastUni api'
 
 
 @app.route('/get_summary', methods=['POST'])
 def get_summary():
+    print("GET_SUMMARY")
     logging.getLogger('flask_cors').level = logging.DEBUG
     # https://podcasts.apple.com/us/podcast/the-acquired-podcast-hosts-how-they-started-and/id1469759170?i=1000607682857
     # parse out request data
@@ -51,9 +72,13 @@ def get_summary():
     print(post_data)
     podcast_episode_link = post_data['podcastEpisodeLink']
     bullet_points = post_data['numBulletPoints']
+    uid = post_data['uid']
 
     # get podcast rss feed info and name
     pod_name, rss_feed = get_name_and_rss_feed_url(podcast_episode_link)
+    if pod_name is None or rss_feed is None:
+        print("POD NAME OR RSS_FEED NO GOOD")
+        abort(500, descpription="Unable to get the podcast name or feed")
 
     # handle podcast transcription and audio contents
     check_podcast_transcription_and_audio_contents(rss_feed, pod_name)
@@ -64,11 +89,32 @@ def get_summary():
     # clean up
     final_transcription = cleanup_bullet_points(bullet_points_summary)
 
-    # return the goods!
-    # data = {"podName": pod_name, "transcription": final_transcription}
+    # Remove pod download after all processing has been done
+    pod_audio_removal(pod_name)
+
+    # Convert pod_name to something usable for the user
+    # pod_name = pod_name_normal_conversion(pod_name)
+
     data = {"podName": pod_name, "transcription": bullet_points_summary}
-    # data = {"podName": "pod_name", "transcription": "transcription"}
+
+    if len(bullet_points_summary) < 1:
+        abort(500, description="An error occured while processing the request")
+
+    summary_item = {
+        "uid": uid,
+        "pod_name": pod_name,
+        "summary": bullet_points_summary,
+        "summary_type": bullet_points
+    }
+
+    db.collection(f"summaries").add(summary_item)
+    db.document(f"users/{uid}").update({"requesting": False})
     return jsonify(data)
+
+def pod_audio_removal(pod_name):
+    file_path = f"{APP_DIR}/pod_downloads/{pod_name}.mp3"
+    if os.path.isfile(file_path):
+        os.remove(file_path)
 
 
 def cleanup_bullet_points(bullet_points):
@@ -84,35 +130,26 @@ def get_name_and_rss_feed_url(apple_podcast_url):
     pod_name = ""
     rss_feed_url = ""
     try:
-        apple_podcast_id = re.search(r"id(\d+)", apple_podcast_url).group(1)
-
-        #Get Pod Name
-        pod_name = ""
-        name_pattern = r"https://podcasts.apple.com/us/podcast/([^/]+)"
-        match = re.search(name_pattern, apple_podcast_url)
+        pattern = r'i=(\d+)'
+        match = re.search(pattern, apple_podcast_url)
         if match:
-            pod_name = match.group(1)
-            pod_name = pod_name.replace("-", "+")
-            print("Podcast Name:", pod_name)
+            # Fetch podcast details using the iTunes Search API
+            itunes_episode_api_url = f"https://itunes.apple.com/search?term={match.group(1)}&entity=podcastEpisode"
+            response = requests.get(itunes_episode_api_url)
+            data = response.json()
+            # Extract the RSS feed URL from the response
+            if data["resultCount"] > 0:
+                rss_feed_url = data["results"][0]["episodeUrl"]
+                pod_name = data["results"][0]["trackName"]
+            else:
+                raise InvalidFeedUrl
         else:
             raise InvalidPodName
-
-        # Fetch podcast details using the iTunes Search API
-        itunes_episode_api_url = f"https://itunes.apple.com/search?term={pod_name}&entity=podcastEpisode"
-        response = requests.get(itunes_episode_api_url)
-        data = response.json()
-
-        # Extract the RSS feed URL from the response
-        if data["resultCount"] > 0:
-            rss_feed_url = data["results"][0]["episodeUrl"]
-        else:
-            raise InvalidFeedUrl
     except InvalidPodName:
         print("Exception occurred: pod_name")
     except InvalidFeedUrl:
         print("Exception occurred: feed_url")
-
-    print(rss_feed_url)
+    print("PodName:", pod_name, "\n", "MP3 URL:", rss_feed_url)
     return pod_name, rss_feed_url
 
 
@@ -137,8 +174,10 @@ def check_podcast_transcription_and_audio_contents(rss_feed, pod_name):
     if not os.path.isfile(file_path_transcription):
         if not os.path.isfile(file_path_pod_audio_download):
             download_podcast(pod_name, rss_feed)
+            print("Transcribing after download")
             set_rawtrans_and_TLtrans(pod_name)
         else:
+            print("Audio already exists, transcribing now")
             set_rawtrans_and_TLtrans(pod_name)
 
 
@@ -146,10 +185,15 @@ def set_rawtrans_and_TLtrans(pod_name):
     # set raw transcription of audio file
     torch.cuda.is_available()
     print("AVAILABLE: ",  torch.cuda.is_available())
+    start = time.time()
+    print("start transcriptions:", start)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     model = whisper.load_model("base.en", device=DEVICE)
     result = model.transcribe(f"{APP_DIR}/pod_downloads/{pod_name}.mp3")
+    print("end transcription:", time.time())
+    print("transcription total time:", time.time()-start)
     transcription = result["text"]
+
     if not os.path.exists(f'{APP_DIR}/transcriptions'):
         print("CREATING transcriptions DIRECTORY")
         os.mkdir(f'{APP_DIR}/transcriptions')
@@ -198,13 +242,14 @@ def get_bullet_summary(txt_file, num_bullets):
     with open(f'{APP_DIR}/transcriptions_resized/'+txt_file, 'r') as file:
         content = file.read()
 
+
     prompt = f"Summarize the following into {str(num_bullets)} bullet points:\n\n{content}\n"
     openai.api_key = str(OPENAI_KEY)
     response = openai.Completion.create(
         model="text-davinci-003",
         prompt=prompt,
         temperature=0.0,
-        max_tokens=256,
+        max_tokens=512,
         top_p=1,
         frequency_penalty=0,
         presence_penalty=0,
@@ -261,6 +306,11 @@ def total_num_words(string):
 
 
 if __name__ == '__main__':
+    # production
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-    # app.run(debug=True)
 
+    # local with phone
+    # app.run(host="127.0.0.1", debug=True)
+
+    # local
+    app.run(debug=True)
